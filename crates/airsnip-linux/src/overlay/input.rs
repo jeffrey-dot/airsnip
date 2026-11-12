@@ -319,7 +319,7 @@ impl Dispatch<WlKeyboard, ()> for Backend {
                             }
                             // Enter 只在没有输入法接管时作为提交键：
                             // 有输入法时 Enter 会被它吃掉（用于确认候选词），我们根本收不到。
-                            KEY_ENTER | KEY_KPENTER if !ov.ime_active => {
+                            KEY_ENTER | KEY_KPENTER => {
                                 let ok = super::text_input::commit(ov);
                                 crate::wayland::debug(format!("文本：Enter 提交 → {ok}"));
                                 need_ime_off = true;
@@ -330,10 +330,11 @@ impl Dispatch<WlKeyboard, ()> for Backend {
                             }
                             KEY_SHIFT_L | KEY_SHIFT_R => {}
                             _ => {
-                                // 没有输入法时用按键兜底（有输入法就只认 commit_string）
-                                if !ov.ime_active
-                                    && let Some(c) = super::text_input::key_char(key, ov.shift)
-                                {
+                                // 按键兜底：**只要收到了按键就说明输入法没在接管**
+                                // （输入法接管时合成器不会把按键发给我们，只回 commit_string）。
+                                // 早期用 `ime_active` 当闸门，导致"先用中文、再切回英文"后按键被
+                                // 全丢：那个标志一旦置上就再没复位。
+                                if let Some(c) = super::text_input::key_char(key, ov.shift) {
                                     let mut buf = [0u8; 4];
                                     super::text_input::insert(ov, c.encode_utf8(&mut buf));
                                     need_cursor_sync = true;

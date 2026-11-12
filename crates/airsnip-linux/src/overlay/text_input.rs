@@ -24,7 +24,10 @@ use super::state::Overlay;
 pub struct TextEdit {
     /// 文字左上角（画布坐标）。
     pub pos: (f32, f32),
+    /// 已提交文字。
     pub text: String,
+    /// 输入法的预编辑串（组字中，尚未上屏）。渲染时跟在正文后面并加下划线。
+    pub preedit: String,
     pub font_size: f32,
     pub family: std::sync::Arc<str>,
     pub color: [u8; 4],
@@ -37,6 +40,7 @@ pub fn begin(ov: &mut Overlay, p: (i32, i32)) {
     ov.text_edit = Some(TextEdit {
         pos: (x as f32, y as f32),
         text: String::new(),
+        preedit: String::new(),
         font_size: DEFAULT_FONT_SIZE,
         family: std::sync::Arc::from(DEFAULT_FAMILY),
         color: ov.style.color,
@@ -49,7 +53,24 @@ pub fn begin(ov: &mut Overlay, p: (i32, i32)) {
 pub fn insert(ov: &mut Overlay, s: &str) {
     if let Some(edit) = ov.text_edit.as_mut() {
         edit.text.push_str(s);
+        edit.preedit.clear(); // 上屏后预编辑串自然结束
+        crate::wayland::debug(format!("文本插入 {s:?} → {:?}", edit.text));
     }
+}
+
+/// 更新输入法的预编辑串（组字中）。
+pub fn set_preedit(ov: &mut Overlay, s: &str) {
+    if let Some(edit) = ov.text_edit.as_mut() {
+        if edit.preedit != s {
+            edit.preedit.clear();
+            edit.preedit.push_str(s);
+        }
+    }
+}
+
+/// 当前预编辑串（组字中）。
+pub fn preedit(ov: &Overlay) -> &str {
+    ov.text_edit.as_ref().map(|e| e.preedit.as_str()).unwrap_or("")
 }
 
 /// 退格。
@@ -184,6 +205,15 @@ pub fn paint(pixmap: &mut tiny_skia::Pixmap, edit: &TextEdit, width: f32) {
     let _ = width;
 }
 
+fn draw_underline(pixmap: &mut tiny_skia::Pixmap, at: (f32, f32), width: f32, font_size: f32, color: [u8; 4]) {
+    let Some(rect) = tiny_skia::Rect::from_xywh(at.0, at.1 + font_size * 0.95, width.max(1.0), 1.5) else {
+        return;
+    };
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
+    pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+}
+
 fn draw_caret(pixmap: &mut tiny_skia::Pixmap, at: (f32, f32), font_size: f32) {
     let Some(rect) = tiny_skia::Rect::from_xywh(at.0, at.1, 2.0, font_size) else {
         return;
@@ -196,6 +226,9 @@ fn draw_caret(pixmap: &mut tiny_skia::Pixmap, at: (f32, f32), font_size: f32) {
 /// 请求输入法接管（覆盖层获得键盘焦点后调用），并按当前插入点设置光标矩形。
 pub fn enable_ime(state: &mut crate::wayland::Backend) {
     let Some(ti) = state.text_input.clone() else { return };
+    // 声明内容类型：部分输入法（rime 等）据此决定要不要直接透传按键
+    use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{ContentHint, ContentPurpose};
+    ti.set_content_type(ContentHint::None, ContentPurpose::Normal);
     ti.enable();
     let Some(ov) = state.overlay.as_ref() else {
         ti.commit();
@@ -234,7 +267,11 @@ fn cursor_rect(ov: &Overlay) -> (i32, i32, i32, i32) {
         bold: false,
         italic: false,
     };
-    let (tw, _) = crate::draw::text::with_engine(|sink| sink.measure(&edit.text, &spec));
+    let (tw, _) = crate::draw::text::with_engine(|sink| {
+        let (w1, _) = sink.measure(&edit.text, &spec);
+        let (w2, _) = sink.measure(&edit.preedit, &spec);
+        (w1 + w2, 0.0f32)
+    });
     let caret = (edit.pos.0 + tw, edit.pos.1);
     // 焦点表面的原点：优先用键盘焦点图层，退回"包含插入点的图层"
     let idx = ov.kb_layer.or_else(|| {
@@ -300,10 +337,14 @@ impl wayland_client::Dispatch<wayland_protocols::wp::text_input::zv3::client::zw
                     }
                 }
                 Event::PreeditString { text, .. } => {
-                    // 预编辑串只用来判断「输入法已接管」，不渲染（简化实现）
-                    if text.map(|s| !s.is_empty()).unwrap_or(false) {
+                    // 预编辑串（组字中）要画出来，否则用户看不到任何反应
+                    let s = text.unwrap_or_default();
+                    if !s.is_empty() {
                         ov.ime_active = true;
                     }
+                    crate::wayland::debug(format!("文本：预编辑串 {s:?}"));
+                    set_preedit(ov, &s);
+                    changed = true;
                 }
                 Event::DeleteSurroundingText { before_length, .. } => {
                     for _ in 0..before_length.min(64) {
