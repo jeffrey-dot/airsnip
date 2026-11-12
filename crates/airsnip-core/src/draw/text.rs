@@ -36,6 +36,15 @@ pub trait TextSink {
     /// 文本尺寸（宽, 高），不含内边距。
     fn measure(&self, text: &str, spec: &TextSpec) -> (f32, f32);
 
+    /// 文字块与**视觉中心**的垂直偏差补偿（物理像素）。
+    ///
+    /// 各平台文本引擎对"行盒"的定义不同：DirectWrite 的布局盒含额外 leading，
+    /// 用行盒居中时数字会偏下，需要一点补偿；cosmic-text 侧我们直接返回**墨迹**尺寸，
+    /// 因此补偿为 0。默认 0，只有需要的实现覆盖它。
+    fn vertical_bias(&self, _font_size: f32) -> f32 {
+        0.0
+    }
+
     /// 以 `pos` 为左上角绘制到 `pixmap`（`tr` 为坐标系变换）。
     fn draw(&self, pixmap: &mut Pixmap, pos: Point, text: &str, spec: &TextSpec, color: [u8; 4], tr: Transform);
 }

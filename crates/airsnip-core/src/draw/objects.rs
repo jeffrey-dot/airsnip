@@ -252,7 +252,10 @@ fn draw_number(pixmap: &mut Pixmap, obj: &Object, tr: Transform, sink: &dyn Text
     spec.bold = true;
     let label = n.to_string();
     let (tw, th) = sink.measure(&label, &spec);
-    let pos = Point::new(center.x - tw * 0.5, center.y - th * 0.5 + *font_size * 0.08);
+    let pos = Point::new(
+        center.x - tw * 0.5,
+        center.y - th * 0.5 + sink.vertical_bias(*font_size),
+    );
     sink.draw(pixmap, pos, &label, &spec, contrast_ink(obj.style.color), tr);
 }
 

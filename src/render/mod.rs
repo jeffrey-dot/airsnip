@@ -33,6 +33,11 @@ impl TextSink for DWriteSink {
         text::measure(s, &font_spec(spec))
     }
 
+    /// DirectWrite 的布局盒含额外 leading，序号徽标居中时历史上就有这个补偿。
+    fn vertical_bias(&self, font_size: f32) -> f32 {
+        font_size * 0.08
+    }
+
     fn draw(&self, pixmap: &mut Pixmap, pos: Point, s: &str, spec: &TextSpec, color: [u8; 4], tr: Transform) {
         text::draw(pixmap, pos, s, &font_spec(spec), color, tr);
     }
