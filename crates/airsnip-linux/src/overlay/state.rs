@@ -77,6 +77,8 @@ impl Sel {
 pub enum Action {
     Copy,
     Save,
+    /// 贴图：把导出图钉在屏幕上（子进程常驻）。
+    Pin,
     Cancel,
 }
 

@@ -263,6 +263,24 @@ Wayland 没有 Windows 的 `EDIT` 子控件可用，所以文本编辑是自己�
 **架构调整**：`overlay/objedit.rs` 拆成 `objedit/{mod,paint}.rs`（守住单文件 300 行红线），
 `mod.rs` 只放几何与交互，`paint.rs` 只放装饰绘制。
 
+### 15. 贴图（S5，PIN-1…PIN-7）
+
+`crates/airsnip-linux/src/pin/`。选型与踩点：
+
+- **表面**：`zwlr_layer_shell_v1` 的 **overlay 层**（与覆盖层同一套协议），
+  `anchor = Top|Left` + `margin(top, left)` 精确定位；拖动只改 margin，不重建表面。
+  **首次 commit 前必须先 `set_size`**：只锚定 Top|Left 时 `width=0` 是协议错误
+  （实测报 `Protocol error 1 … width 0 requested without setting left and right anchors`）。
+- **必须显式指定 output**：layer surface 不绑定 output 时由合成器自己挑（niri 实测挑到了
+  另一块屏）。截图侧按「选区中心落在哪个输出」把输出名传给 `pin --output`。
+- **缩放 / 透明度**在写 `wl_shm` 缓冲时用 CPU 做（最近邻 + alpha 乘系数），
+  不依赖合成器特效；`Argb8888` 是直通 alpha、内存序 B,G,R,A。渲染抽成纯函数
+  `pin::paint::render`，像素顺序 / 边框颜色 / alpha 缩放都有单测。
+- **输入派发**用**带标记的 udata**（`PinPtr` / `PinKbd`）另开一套 `Dispatch<WlPointer, _>`，
+  与覆盖层那份 `Dispatch<WlPointer, ()>` 互不干扰（同一 `Backend` 可以有多个 udata 类型）。
+- **生命周期**：贴图要活到用户关掉，而截图会话是"按完就退" → 贴图跑独立进程
+  （`airsnip pin <png> [--output]`），截图侧 `spawn` 后自己退出；临时 PNG 由贴图进程读完即删。
+
 ## 后果
 
 - Windows 侧行为、构建命令、打包产物**均未改变**（根包就是 workspace root）；

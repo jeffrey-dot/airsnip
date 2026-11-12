@@ -62,6 +62,16 @@ pub struct Backend {
     pub frame: capture::Progress,
     /// 覆盖层会话状态（只在 `snip` 子命令下存在）。
     pub overlay: Option<crate::overlay::state::Overlay>,
+    /// 贴图（`pin` 子命令）：一个进程一块。
+    pub pins: Vec<crate::pin::Pin>,
+    /// 贴图用的输入状态（与覆盖层分开，靠 udata 标记区分派发）。
+    pub pin_serial: u32,
+    pub pin_cursor: (f64, f64),
+    pub pin_last_click: Option<(std::time::Instant, (f64, f64))>,
+    pub pin_ctrl: bool,
+    pub pin_shift: bool,
+    pub pin_pointer: Option<WlPointer>,
+    pub pin_keyboard: Option<WlKeyboard>,
 }
 
 /// 连接 = 后端状态 + 事件队列（二者分开存放，避免 `dispatch` 时借用冲突）。

@@ -24,6 +24,15 @@ use crate::wayland::Session;
 use state::{Action, Overlay};
 use surface::Geom;
 
+/// 选区中心落在哪个输出上（用于贴图指定输出）。
+fn output_name(shots: &[crate::capture::Shot], sel: state::Sel) -> Option<String> {
+    let (cx, cy) = (sel.x + sel.w / 2, sel.y + sel.h / 2);
+    shots
+        .iter()
+        .find(|s| cx >= s.x && cx < s.x + s.w as i32 && cy >= s.y && cy < s.y + s.h as i32)
+        .map(|s| s.name.clone())
+}
+
 /// 跑一次截图会话。
 pub fn run() -> Result<(), Error> {
     let mut session = Session::connect()?;
@@ -97,6 +106,21 @@ pub fn run() -> Result<(), Error> {
     session.flush()?;
 
     match (action, out) {
+        (Action::Pin, Some(canvas)) => {
+            // 贴图要活到用户关掉 → 起一个常驻子进程（截图进程自己照常退出）
+            let png = codec::png_bytes(&canvas)?;
+            let path = std::env::temp_dir().join(format!("airsnip-pin-{}.png", std::process::id()));
+            std::fs::write(&path, png)?;
+            let exe = std::env::current_exe()?;
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg("pin").arg(&path);
+            // 把选区所在的输出传过去，避免贴图飞到另一块屏上
+            if let Some(name) = sel.and_then(|s| output_name(&shots, s)) {
+                cmd.arg("--output").arg(name);
+            }
+            cmd.spawn()?;
+            eprintln!("airsnip：已贴图（拖动摇位置 / 滚轮缩放 / Ctrl+滚轮透明度 / Esc 或双击关闭）");
+        }
         (Action::Save, Some(canvas)) => {
             let path = paths::next_path();
             codec::write_png(&canvas, &path)?;

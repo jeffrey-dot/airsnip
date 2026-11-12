@@ -30,6 +30,7 @@ const KEY_SHIFT_L: u32 = 42;
 const KEY_SHIFT_R: u32 = 54;
 const KEY_BACKSPACE: u32 = 14;
 const KEY_DELETE: u32 = 111;
+const KEY_F3: u32 = 61;
 const KEY_LEFT: u32 = 105;
 const KEY_RIGHT: u32 = 106;
 const KEY_UP: u32 = 103;
@@ -260,6 +261,7 @@ fn on_toolbar(ov: &mut super::state::Overlay, item: super::toolbar::Item) {
         Item::Redo => {
             edit::redo(ov);
         }
+        Item::Pin => ov.finish(Action::Pin),
         Item::Copy => ov.finish(Action::Copy),
         Item::Save => ov.finish(Action::Save),
         Item::Sep => {}
@@ -338,6 +340,8 @@ impl Dispatch<WlKeyboard, ()> for Backend {
                             KEY_CTRL_L | KEY_CTRL_R => ov.ctrl = true,
                             KEY_ESC => ov.finish(Action::Cancel),
                             KEY_ENTER | KEY_KPENTER => ov.finish(Action::Copy),
+                            // F3：贴图（与 Windows 版同一个键）
+                            KEY_F3 => ov.finish(Action::Pin),
                             KEY_C if ov.ctrl => ov.finish(Action::Copy),
                             KEY_S if ov.ctrl => ov.finish(Action::Save),
                             KEY_BACKSPACE | KEY_DELETE => {

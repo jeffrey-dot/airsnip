@@ -46,6 +46,7 @@ pub enum Item {
     Fill,
     Undo,
     Redo,
+    Pin,
     Copy,
     Save,
     /// 分隔线（不可点）。
@@ -95,7 +96,7 @@ fn items() -> Vec<Item> {
     v.push(Item::Sep);
     v.extend([Item::Fill, Item::Undo, Item::Redo]);
     v.push(Item::Sep);
-    v.extend([Item::Copy, Item::Save]);
+    v.extend([Item::Pin, Item::Copy, Item::Save]);
     v
 }
 
@@ -228,6 +229,7 @@ pub fn paint(
             Item::Fill => icon::draw(p, Icon::Fill, cx, cy, ICON, icon_color(filled)),
             Item::Undo => icon::draw(p, Icon::Undo, cx, cy, ICON, ICON_COLOR),
             Item::Redo => icon::draw(p, Icon::Redo, cx, cy, ICON, ICON_COLOR),
+            Item::Pin => icon::draw(p, Icon::Pin, cx, cy, ICON, ICON_COLOR),
             Item::Copy => icon::draw(p, Icon::Copy, cx, cy, ICON, ICON_COLOR),
             Item::Save => icon::draw(p, Icon::Save, cx, cy, ICON, ICON_COLOR),
             Item::Sep => {}

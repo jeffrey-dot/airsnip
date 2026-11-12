@@ -143,6 +143,7 @@ pub fn handle_at(obj: &Object, p: Point) -> Option<Handle> {
 }
 
 /// 严格命中（点在线身/描边上）：判定「这一下是画，还是点中对象」。
+#[allow(dead_code)] // 供后续"画在对象上"的判定复用
 pub fn hit_object(ov: &Overlay, p: Point) -> Option<usize> {
     // 容差含线宽的一半，粗线也好点中
     ov.doc

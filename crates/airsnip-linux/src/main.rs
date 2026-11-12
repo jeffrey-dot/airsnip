@@ -18,6 +18,7 @@ mod capture;
 mod codec;
 mod draw;
 mod overlay;
+mod pin;
 mod wayland;
 
 use std::path::PathBuf;
@@ -41,6 +42,7 @@ fn run(args: &[String]) -> Result<(), Error> {
     match args.first().map(String::as_str) {
         Some("capture") => cmd_capture(&args[1..]),
         Some("snip") => overlay::run(),
+        Some("pin") => cmd_pin(&args[1..]),
         Some("-h" | "--help" | "help") | None => {
             print_help();
             Ok(())
@@ -54,6 +56,7 @@ fn print_help() {
         "AirSnip（Linux 前端，版本 {}）\n\n\
          用法：\n  \
            airsnip snip                 # 截图：覆盖层 → 框选 → Enter 复制 / Ctrl+S 保存\n  \
+  airsnip pin <图片>           # 把一张图片钉在屏幕最上层（拖动/缩放/透明度/关闭）\n  \
   airsnip capture [-o 文件] [--output 名称] [--list]\n\n\
          说明：\n  \
            snip      冻结画面并弹出覆盖层，框选后 Enter 复制、Ctrl+S 另存、Esc 取消\n  \
@@ -64,6 +67,24 @@ fn print_help() {
          （niri / sway / Hyprland / KDE Plasma 6 均支持）。",
         env!("CARGO_PKG_VERSION")
     );
+}
+
+fn cmd_pin(args: &[String]) -> Result<(), Error> {
+    let mut path: Option<PathBuf> = None;
+    let mut output: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--output" => {
+                i += 1;
+                output = Some(args.get(i).ok_or("--output 需要一个输出名")?.clone());
+            }
+            other => path = Some(PathBuf::from(other)),
+        }
+        i += 1;
+    }
+    let path = path.ok_or("用法：airsnip pin <图片路径> [--output 输出名]")?;
+    pin::run(&path, output.as_deref())
 }
 
 fn cmd_capture(args: &[String]) -> Result<(), Error> {
