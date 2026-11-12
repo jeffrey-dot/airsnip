@@ -31,8 +31,8 @@ use crate::Error;
 use crate::wayland::{Backend, Session};
 use image::PinImage;
 
-/// 贴图边框开关的默认值（`Ctrl+F3` 在 Windows 版是全局热键，Wayland 侧改为 `B` 键）。
-pub const DEFAULT_BORDER: bool = true;
+/// 边框默认开（Windows 版 `Ctrl+F3` 开关边框；Wayland 侧改用 `B` 键）。
+const DEFAULT_BORDER: bool = true;
 
 /// 一块贴图。
 pub struct Pin {
@@ -126,7 +126,7 @@ impl Pin {
             pos,
             zoom: 1.0,
             opacity: 255,
-            border: true,
+            border: DEFAULT_BORDER,
             logical: None,
             bufs: Vec::new(),
             next: 0,

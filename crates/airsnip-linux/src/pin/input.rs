@@ -95,11 +95,8 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                     return;
                 };
                 let Some(drag) = pin.drag else { return };
-                // 目标位置 = (当前表面位置 + 局部坐标) - 抓取点
-                let target_x = pin.pos.0 as f64 + surface_x - drag.grab.0;
-                let target_y = pin.pos.1 as f64 + surface_y - drag.grab.1;
-                let nx = (target_x.round() as i32).max(0);
-                let ny = (target_y.round() as i32).max(0);
+                // 目标位置 = (当前表面位置 + 局部坐标) - 抓取点（幂等，不累积漂移）
+                let (nx, ny) = drag_target(pin.pos, (surface_x, surface_y), drag.grab);
                 if (nx, ny) != pin.pos {
                     pin.pos = (nx, ny);
                     pin.apply_pos();
