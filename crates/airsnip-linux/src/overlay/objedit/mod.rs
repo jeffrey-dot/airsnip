@@ -308,7 +308,8 @@ pub fn release(ov: &mut Overlay) {
     ov.doc.commit(true);
 }
 
-/// 取消拖动（Esc）。
+/// 取消拖动（Esc 时回滚未完成的几何变更）。
+#[allow(dead_code)]
 pub fn cancel(ov: &mut Overlay) {
     if ov.edit.take().is_some() {
         ov.doc.commit(false);

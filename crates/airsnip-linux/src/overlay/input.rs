@@ -145,9 +145,6 @@ impl Dispatch<WlPointer, ()> for Backend {
                         // 2) 对象编辑优先：点中对象 = 选中（Ctrl 才是拖动），点手柄 = 缩放
                         if !handled && ov.current_sel().is_some() {
                             handled = objedit::press(ov, p, ov.ctrl);
-                            if ov.edit.is_some() {
-                                repaint = true;
-                            }
                         }
                         // 3) 已框选且按在选区内 → 画标注；否则开始新的框选
                         if !handled {
@@ -180,7 +177,6 @@ impl Dispatch<WlPointer, ()> for Backend {
                         ov.toolbar_hold = false;
                     } else if ov.edit.is_some() {
                         objedit::release(ov);
-                        repaint = true;
                     } else if ov.drawing {
                         edit::commit(ov);
                         ov.drawing = false;

@@ -94,7 +94,8 @@ pub fn commit(ov: &mut Overlay) -> bool {
     true
 }
 
-/// 取消（Esc）：丢弃编辑内容。
+/// 取消（Esc）：丢弃编辑内容（当前 Esc 是"提交"，保留此函数供双击重置等场景）。
+#[allow(dead_code)]
 pub fn cancel(ov: &mut Overlay) {
     ov.text_edit = None;
     ov.ime_active = false;
