@@ -47,8 +47,8 @@ pub fn paint_pin(state: &mut Backend, idx: usize) {
         // 新内容区域（桌面坐标）→ 表面局部坐标
         let new = intersect(rect, (origin.0, origin.1, size.0, size.1))
             .map(|(x, y, w, h)| (x - origin.0, y - origin.1, w, h));
-        // 这块缓冲上次画过的区域：先擦掉，否则换缓冲时会留残影
-        let stale = layer.last;
+        // 这块缓冲**自己**上次画过的区域：先擦掉，否则会留残影
+        let stale = layer.bufs[bi].last;
         let buf = &mut layer.bufs[bi];
         let (bw, bh) = (buf.w as u32, buf.h as u32);
         let px = buf.bytes_mut();
@@ -77,7 +77,7 @@ pub fn paint_pin(state: &mut Backend, idx: usize) {
             layer.surface.damage_buffer(r.0.max(0), r.1.max(0), r.2, r.3);
         }
         layer.surface.commit();
-        layer.last = new;
+        layer.bufs[bi].last = new;
     }
 }
 

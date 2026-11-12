@@ -50,8 +50,6 @@ pub struct PinLayer {
     /// 双缓冲：拖动时交替使用，尽量不丢帧。
     pub bufs: Vec<PinBuf>,
     next: usize,
-    /// 每个缓冲上次画进去的区域（表面局部坐标），换缓冲时用来擦掉残影。
-    pub last: Option<(i32, i32, i32, i32)>,
 }
 
 /// 一块 shm 缓冲（尺寸 = 一个输出的整屏）。
@@ -61,6 +59,10 @@ pub struct PinBuf {
     pub released: Arc<AtomicBool>,
     pub w: i32,
     pub h: i32,
+    /// **这块缓冲自己**上次画进去的区域（表面局部坐标）。
+    /// 必须按缓冲记录：两个缓冲轮流用时，若共用一份记录，会擦到另一块去，
+    /// 每块自己的旧像素留着 → 拖动时拖出一串蓝框残影。
+    pub last: Option<(i32, i32, i32, i32)>,
     _file: std::fs::File,
 }
 
@@ -137,7 +139,6 @@ impl Pin {
                 logical: None,
                 bufs: Vec::new(),
                 next: 0,
-                last: None,
             });
         }
         if layers.is_empty() {
@@ -260,6 +261,7 @@ fn create_buf(
         released,
         w,
         h,
+        last: None,
         _file: file,
     })
 }
