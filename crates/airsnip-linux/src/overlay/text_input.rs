@@ -68,11 +68,6 @@ pub fn set_preedit(ov: &mut Overlay, s: &str) {
     }
 }
 
-/// 当前预编辑串（组字中）。
-pub fn preedit(ov: &Overlay) -> &str {
-    ov.text_edit.as_ref().map(|e| e.preedit.as_str()).unwrap_or("")
-}
-
 /// 退格。
 pub fn backspace(ov: &mut Overlay) {
     if let Some(edit) = ov.text_edit.as_mut() {
@@ -186,21 +181,35 @@ pub fn paint(pixmap: &mut tiny_skia::Pixmap, edit: &TextEdit, width: f32) {
     };
     let pos = Point::new(edit.pos.0, edit.pos.1);
     crate::draw::text::with_engine(|sink| {
-        if edit.text.is_empty() {
-            // 空内容：画一条竖线光标提示"可以打字了"
-            draw_caret(pixmap, edit.pos, edit.font_size);
-            return;
-        }
-        sink.draw(
-            pixmap,
-            pos,
-            &edit.text,
-            &spec,
-            edit.color,
-            tiny_skia::Transform::identity(),
-        );
         let (tw, _) = sink.measure(&edit.text, &spec);
-        draw_caret(pixmap, (edit.pos.0 + tw, edit.pos.1), edit.font_size);
+        if !edit.text.is_empty() {
+            sink.draw(
+                pixmap,
+                pos,
+                &edit.text,
+                &spec,
+                edit.color,
+                tiny_skia::Transform::identity(),
+            );
+        }
+        // 组字中的预编辑串：半透明 + 下划线，与已提交文字区分
+        let (pw, _) = sink.measure(&edit.preedit, &spec);
+        if !edit.preedit.is_empty() {
+            let pre = (edit.pos.0 + tw, edit.pos.1);
+            let mut c = edit.color;
+            c[3] = 200;
+            sink.draw(
+                pixmap,
+                Point::new(pre.0, pre.1),
+                &edit.preedit,
+                &spec,
+                c,
+                tiny_skia::Transform::identity(),
+            );
+            draw_underline(pixmap, pre, pw, edit.font_size, c);
+        }
+        // 光标始终在「正文 + 预编辑」之后
+        draw_caret(pixmap, (edit.pos.0 + tw + pw, edit.pos.1), edit.font_size);
     });
     let _ = width;
 }
@@ -322,6 +331,7 @@ impl wayland_client::Dispatch<wayland_protocols::wp::text_input::zv3::client::zw
     ) {
         use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::Event;
         let mut changed = false;
+        let mut need_cursor = false;
         {
             let Some(ov) = state.overlay.as_mut() else {
                 return;
@@ -333,6 +343,7 @@ impl wayland_client::Dispatch<wayland_protocols::wp::text_input::zv3::client::zw
                         ov.ime_active = true;
                         insert(ov, &s);
                         changed = true;
+                        need_cursor = true;
                         crate::wayland::debug(format!("文本：输入法上屏 {s:?}"));
                     }
                 }
@@ -351,13 +362,20 @@ impl wayland_client::Dispatch<wayland_protocols::wp::text_input::zv3::client::zw
                         backspace(ov);
                     }
                     changed = true;
+                    need_cursor = true;
                 }
                 _ => {}
             }
         }
-        if changed {
-            // 文字变长后插入点右移，候选框要跟着走
+        if need_cursor {
+            // 上屏/删除属于真实文字变化：插入点变了，候选框跟一次即可
             sync_cursor(state);
+        }
+        if changed {
+            // 注意：**不要**在这里调 `sync_cursor`。它会 `text_input.commit()`，
+            // 而合成器会把这次 commit 当成新的输入状态、重新下发一遍 preedit，
+            // 于是「预编辑 → commit → 再预编辑」形成回环（实测刷出几百条重复事件，
+            // 并且把组字状态搅乱：按空格提交不出去，要等下一个按键才把上一段冲出来）。
             super::paint::refresh_all(state);
         }
     }
