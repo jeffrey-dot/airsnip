@@ -47,8 +47,11 @@ pub struct PinLayer {
     pub layer: ZwlrLayerSurfaceV1,
     /// 合成器给的逻辑尺寸（= 本输出）。
     pub logical: Option<(u32, u32)>,
-    /// 单缓冲：贴图只在交互时重绘，缓冲忙就跳过这一帧（避免撕裂）。
-    pub buf: Option<PinBuf>,
+    /// 双缓冲：拖动时交替使用，尽量不丢帧。
+    pub bufs: Vec<PinBuf>,
+    next: usize,
+    /// 每个缓冲上次画进去的区域（表面局部坐标），换缓冲时用来擦掉残影。
+    pub last: Option<(i32, i32, i32, i32)>,
 }
 
 /// 一块 shm 缓冲（尺寸 = 一个输出的整屏）。
@@ -132,7 +135,9 @@ impl Pin {
                 surface,
                 layer,
                 logical: None,
-                buf: None,
+                bufs: Vec::new(),
+                next: 0,
+                last: None,
             });
         }
         if layers.is_empty() {
@@ -170,24 +175,39 @@ impl Pin {
         (x0, y0, (x1 - x0).max(1), (y1 - y0).max(1))
     }
 
-    /// 准备某个输出的缓冲（configure 之后调用）。
+    /// 准备某个输出的双缓冲（configure 之后调用）。
     pub fn ensure_buf(&mut self, idx: usize, shm: &wayland_client::protocol::wl_shm::WlShm, qh: &QueueHandle<Backend>) {
         let Some(layer) = self.layers.get_mut(idx) else { return };
-        if layer.buf.is_some() {
+        if !layer.bufs.is_empty() {
             return;
         }
         let (w, h) = layer.logical.unwrap_or((1, 1));
         let (w, h) = ((w as i32).max(1), (h as i32).max(1));
-        if let Ok(buf) = create_buf(shm, qh, w, h) {
-            layer.buf = Some(buf);
+        for _ in 0..2 {
+            if let Ok(buf) = create_buf(shm, qh, w, h) {
+                layer.bufs.push(buf);
+            }
         }
+    }
+
+    /// 取一块空闲缓冲（轮转）。
+    pub fn take_buf(&mut self, li: usize) -> Option<usize> {
+        let layer = self.layers.get_mut(li)?;
+        for i in 0..layer.bufs.len() {
+            let k = (layer.next + i) % layer.bufs.len();
+            if layer.bufs[k].released.load(std::sync::atomic::Ordering::Acquire) {
+                layer.next = (k + 1) % layer.bufs.len();
+                return Some(k);
+            }
+        }
+        None
     }
 }
 
 impl Drop for Pin {
     fn drop(&mut self) {
         for l in &self.layers {
-            if let Some(b) = &l.buf {
+            for b in &l.bufs {
                 b.buffer.destroy();
             }
             l.layer.destroy();

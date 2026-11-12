@@ -96,10 +96,6 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                     .pins
                     .first()
                     .and_then(|p| p.layers.iter().position(|l| l.surface == surface));
-                crate::wayland::debug(format!(
-                    "贴图指针进入：局部({surface_x:.0},{surface_y:.0}) 图层{:?}",
-                    state.pin_active_layer
-                ));
             }
             wl_pointer::Event::Motion {
                 surface_x, surface_y, ..
@@ -152,7 +148,6 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                         let Some(li) = state.pin_active_layer else {
                             return;
                         };
-                        crate::wayland::debug(format!("贴图按下：指针{:?} 图层{li}", state.pin_cursor));
                         if let Some(pin) = state.pins.first_mut() {
                             if let Some(layer) = pin.layers.get(li) {
                                 let pointer = (

@@ -28,7 +28,7 @@ pub fn paint_all(state: &mut Backend) {
     }
 }
 
-/// 重绘一块贴图涉及的所有输出表面。
+/// 重绘一块贴图涉及的所有输出表面（双缓冲 + 只重绘变化的矩形）。
 pub fn paint_pin(state: &mut Backend, idx: usize) {
     let Some(pin) = state.pins.get_mut(idx) else {
         return;
@@ -37,29 +37,33 @@ pub fn paint_pin(state: &mut Backend, idx: usize) {
     let (zoom, opacity, border) = (pin.zoom, pin.opacity, pin.border);
 
     for li in 0..pin.layers.len() {
-        let layer = &mut pin.layers[li];
-        let Some(buf) = layer.buf.as_mut() else {
+        let Some(bi) = pin.take_buf(li) else {
+            // 两块缓冲都还在合成器手上：丢这一帧（比撕裂好）
             continue;
         };
-        // 缓冲忙（合成器还在用）就跳过这一帧：贴图单缓冲，宁丢一帧也不要撕裂
-        if !buf.released.load(std::sync::atomic::Ordering::Acquire) {
-            continue;
-        }
+        let layer = &mut pin.layers[li];
         let origin = layer.origin;
         let size = layer.size;
-        let inter = intersect(rect, (origin.0, origin.1, size.0, size.1));
+        // 新内容区域（桌面坐标）→ 表面局部坐标
+        let new = intersect(rect, (origin.0, origin.1, size.0, size.1))
+            .map(|(x, y, w, h)| (x - origin.0, y - origin.1, w, h));
+        // 这块缓冲上次画过的区域：先擦掉，否则换缓冲时会留残影
+        let stale = layer.last;
+        let buf = &mut layer.bufs[bi];
         let (bw, bh) = (buf.w as u32, buf.h as u32);
         let px = buf.bytes_mut();
-        px.fill(0);
-        if let Some((ix, iy, iw, ih)) = inter {
+        for r in [stale, new].into_iter().flatten() {
+            clear_rect(px, bw, bh, r);
+        }
+        if let Some((nx, ny, nw, nh)) = new {
             draw_image(
                 px,
                 bw,
                 bh,
                 &pin.image,
-                (ix - origin.0, iy - origin.1),
-                (iw, ih),
-                (ix - rect.0, iy - rect.1),
+                (nx, ny),
+                (nw, nh),
+                (nx + origin.0 - rect.0, ny + origin.1 - rect.1),
                 (rect.2, rect.3),
                 zoom,
                 opacity,
@@ -69,8 +73,25 @@ pub fn paint_pin(state: &mut Backend, idx: usize) {
 
         buf.released.store(false, std::sync::atomic::Ordering::Release);
         layer.surface.attach(Some(&buf.buffer), 0, 0);
-        layer.surface.damage_buffer(0, 0, buf.w, buf.h);
+        for r in [stale, new].into_iter().flatten() {
+            layer.surface.damage_buffer(r.0.max(0), r.1.max(0), r.2, r.3);
+        }
         layer.surface.commit();
+        layer.last = new;
+    }
+}
+
+/// 把一块矩形擦成透明。
+fn clear_rect(buf: &mut [u8], bw: u32, bh: u32, r: (i32, i32, i32, i32)) {
+    let (x0, y0) = (r.0.max(0) as u32, r.1.max(0) as u32);
+    let x1 = ((r.0 + r.2).max(0) as u32).min(bw);
+    let y1 = ((r.1 + r.3).max(0) as u32).min(bh);
+    for y in y0..y1 {
+        let start = ((y * bw + x0) * 4) as usize;
+        let end = ((y * bw + x1) * 4) as usize;
+        if start < end && end <= buf.len() {
+            buf[start..end].fill(0);
+        }
     }
 }
 
