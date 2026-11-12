@@ -72,6 +72,8 @@ pub struct Backend {
     pub pin_shift: bool,
     pub pin_pointer: Option<WlPointer>,
     pub pin_keyboard: Option<WlKeyboard>,
+    /// 队列句柄：个别绘制路径需要新建协议对象（贴图设置输入区域要 wl_region）
+    pub qh: Option<QueueHandle<Backend>>,
 }
 
 /// 连接 = 后端状态 + 事件队列（二者分开存放，避免 `dispatch` 时借用冲突）。
@@ -94,6 +96,7 @@ impl Session {
         let qh = queue.handle();
         let mut backend = Backend::default();
         backend.registry = Some(conn.display().get_registry(&qh, ()));
+        backend.qh = Some(qh.clone());
         // 第一轮：绑定 shm / screencopy / xdg-output / wl_output，并收齐参数与 mode。
         queue.roundtrip(&mut backend)?;
         // 第二轮：为每个输出建 zxdg_output（拿逻辑位置与逻辑尺寸），再收名称。

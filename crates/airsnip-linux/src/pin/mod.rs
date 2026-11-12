@@ -106,17 +106,15 @@ impl Pin {
             qh,
             input::PinLayer,
         );
-        layer.set_anchor(Anchor::Top | Anchor::Left);
-        layer.set_margin(pos.1.max(0), 0, 0, pos.0.max(0));
+        // 表面覆盖整个输出（四边锚定 + size 0）：`wl_pointer` 的局部坐标因此就是
+        // 输出内绝对坐标，拖动不再受"表面自己移动"的干扰。
+        // 图像只画在 `pos` 处，输入区域只保留贴图矩形，其余区域点击穿透。
+        layer.set_anchor(Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right);
         layer.set_exclusive_zone(-1);
         // OnDemand：点一下才拿键盘，避免贴图长期抢走所有按键
         layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
-        // 尺寸必须在**首次 commit 之前**设好：只锚定 Top|Left 时 width=0 是协议错误
-        let (w0, h0) = (
-            (image.w as f32).round().max(1.0) as u32,
-            (image.h as f32).round().max(1.0) as u32,
-        );
-        layer.set_size(w0, h0);
+        // 四边锚定 + size 0 → 合成器给整屏尺寸（实际值在 configure 里）
+        layer.set_size(0, 0);
         surface.commit();
 
         let pin = Self {
@@ -136,17 +134,10 @@ impl Pin {
         Ok(pin)
     }
 
-    /// 位置变化后同步 margin（拖动 / 方向键）。
-    pub fn apply_pos(&self) {
-        self.layer.set_margin(self.pos.1.max(0), 0, 0, self.pos.0.max(0));
-        self.surface.commit();
-    }
-
-    /// 缩放变化后同步表面尺寸。
-    pub fn apply_zoom(&self) {
+    /// 贴图矩形（输出内坐标）。
+    pub fn rect(&self) -> (i32, i32, i32, i32) {
         let (w, h) = self.scaled_size();
-        self.layer.set_size(w as u32, h as u32);
-        self.surface.commit();
+        (self.pos.0, self.pos.1, w, h)
     }
 
     /// 准备双缓冲（configure 之后调用）。
@@ -154,17 +145,13 @@ impl Pin {
         if !self.bufs.is_empty() {
             return;
         }
-        let (w, h) = self.scaled_size();
+        let (w, h) = self.logical.unwrap_or((1, 1));
+        let (w, h) = ((w as i32).max(1), (h as i32).max(1));
         for _ in 0..2 {
             if let Ok(buf) = create_buf(shm, qh, w, h) {
                 self.bufs.push(buf);
             }
         }
-    }
-
-    /// 尺寸变了下重建缓冲（缩放时用）。
-    pub fn reset_buffers(&mut self) {
-        self.bufs.clear();
     }
 
     pub fn take_buffer(&mut self) -> Option<usize> {
@@ -268,6 +255,18 @@ impl Dispatch<ZwlrLayerSurfaceV1, input::PinLayer> for Backend {
             _ => {}
         }
         paint::paint_all(state);
+    }
+}
+
+impl Dispatch<wayland_client::protocol::wl_region::WlRegion, ()> for Backend {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_region::WlRegion,
+        _event: <wayland_client::protocol::wl_region::WlRegion as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
     }
 }
 
