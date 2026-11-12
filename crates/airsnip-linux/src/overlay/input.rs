@@ -275,12 +275,18 @@ impl Dispatch<WlKeyboard, ()> for Backend {
     ) {
         let mut repaint = false;
         let mut need_ime_off = false;
+        let mut need_cursor_sync = false;
         {
             let Some(ov) = state.overlay.as_mut() else {
                 return;
             };
             match event {
-                wl_keyboard::Event::Enter { serial, .. } => ov.serial = serial,
+                wl_keyboard::Event::Enter { serial, surface, .. } => {
+                    ov.serial = serial;
+                    // 记住键盘焦点在哪块图层：输入法候选框要用该表面的局部坐标
+                    ov.kb_layer = ov.layers.iter().position(|l| l.surface == surface);
+                    need_cursor_sync = true;
+                }
                 wl_keyboard::Event::Modifiers { mods_depressed, .. } => {
                     ov.ctrl = mods_depressed & 4 != 0; // XKB Control
                     ov.shift = mods_depressed & 1 != 0; // XKB Shift
@@ -318,7 +324,10 @@ impl Dispatch<WlKeyboard, ()> for Backend {
                                 crate::wayland::debug(format!("文本：Enter 提交 → {ok}"));
                                 need_ime_off = true;
                             }
-                            KEY_BACKSPACE => super::text_input::backspace(ov),
+                            KEY_BACKSPACE => {
+                                super::text_input::backspace(ov);
+                                need_cursor_sync = true;
+                            }
                             KEY_SHIFT_L | KEY_SHIFT_R => {}
                             _ => {
                                 // 没有输入法时用按键兜底（有输入法就只认 commit_string）
@@ -327,6 +336,7 @@ impl Dispatch<WlKeyboard, ()> for Backend {
                                 {
                                     let mut buf = [0u8; 4];
                                     super::text_input::insert(ov, c.encode_utf8(&mut buf));
+                                    need_cursor_sync = true;
                                 }
                             }
                         }
@@ -378,6 +388,9 @@ impl Dispatch<WlKeyboard, ()> for Backend {
         }
         if need_ime_off {
             super::text_input::disable_ime(state);
+        }
+        if need_cursor_sync {
+            super::text_input::sync_cursor(state);
         }
         if repaint {
             paint::refresh_all(state);

@@ -123,6 +123,8 @@ pub struct Overlay {
     pub ime_active: bool,
     /// Shift 是否按住（无输入法时的字符大小写）。
     pub shift: bool,
+    /// 键盘焦点所在图层（输入法候选框要按这个表面的局部坐标定位）。
+    pub kb_layer: Option<usize>,
 }
 
 impl Overlay {
@@ -163,6 +165,7 @@ impl Overlay {
             text_edit: None,
             ime_active: false,
             shift: false,
+            kb_layer: None,
         })
     }
 

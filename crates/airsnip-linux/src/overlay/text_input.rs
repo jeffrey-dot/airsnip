@@ -193,15 +193,75 @@ fn draw_caret(pixmap: &mut tiny_skia::Pixmap, at: (f32, f32), font_size: f32) {
     pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
 }
 
-/// 请求输入法接管（覆盖层获得键盘焦点后调用）。
+/// 请求输入法接管（覆盖层获得键盘焦点后调用），并按当前插入点设置光标矩形。
 pub fn enable_ime(state: &mut crate::wayland::Backend) {
-    if let Some(ti) = state.text_input.clone() {
-        ti.enable();
-        // 光标矩形给输入法定位候选框用；覆盖层是全屏，给 0 尺寸即可（候选框跟鼠标）
-        ti.set_cursor_rectangle(0, 0, 0, 0);
+    let Some(ti) = state.text_input.clone() else { return };
+    ti.enable();
+    let Some(ov) = state.overlay.as_ref() else {
         ti.commit();
-        crate::wayland::debug("文本：已请求输入法");
+        return;
+    };
+    let (x, y, w, h) = cursor_rect(ov);
+    ti.set_cursor_rectangle(x, y, w, h);
+    ti.commit();
+    crate::wayland::debug(format!("文本：已请求输入法，光标框 ({x},{y}) {w}×{h}"));
+}
+
+/// 文字增删 / 光标移动后重新同步光标矩形（输入法候选框跟着插入点走）。
+pub fn sync_cursor(state: &mut crate::wayland::Backend) {
+    let Some(ti) = state.text_input.clone() else { return };
+    let Some(ov) = state.overlay.as_ref() else { return };
+    if ov.text_edit.is_none() {
+        return;
     }
+    let (x, y, w, h) = cursor_rect(ov);
+    ti.set_cursor_rectangle(x, y, w, h);
+    ti.commit();
+    crate::wayland::debug(format!("文本：光标框同步 ({x},{y}) {w}×{h}"));
+}
+
+/// 光标矩形（**键盘焦点所在表面**的局部坐标，协议要求）。
+///
+/// 插入点 = 文字左上角 + 已输入文字的宽度；高度取字号。
+/// 覆盖层每个输出一块表面，所以要把画布坐标换算成该表面的局部坐标。
+fn cursor_rect(ov: &Overlay) -> (i32, i32, i32, i32) {
+    let Some(edit) = ov.text_edit.as_ref() else {
+        return (0, 0, 0, 0);
+    };
+    let spec = airsnip_core::draw::text::TextSpec {
+        family: edit.family.clone(),
+        size: edit.font_size,
+        bold: false,
+        italic: false,
+    };
+    let (tw, _) = crate::draw::text::with_engine(|sink| sink.measure(&edit.text, &spec));
+    let caret = (edit.pos.0 + tw, edit.pos.1);
+    // 焦点表面的原点：优先用键盘焦点图层，退回"包含插入点的图层"
+    let idx = ov.kb_layer.or_else(|| {
+        ov.layers.iter().position(|l| {
+            let (x, y) = l.geom.phys;
+            caret.0 >= x as f32
+                && caret.1 >= y as f32
+                && caret.0 < (x + l.geom.size.0) as f32
+                && caret.1 < (y + l.geom.size.1) as f32
+        })
+    });
+    let (ox, oy) = idx
+        .and_then(|i| ov.layers.get(i))
+        .map(|l| l.geom.phys)
+        .unwrap_or((0, 0));
+    caret_local(caret, (ox, oy), edit.font_size)
+}
+
+/// 插入点（画布坐标）→ 焦点表面的局部光标矩形。抽成纯函数便于单测。
+pub fn caret_local(caret: (f32, f32), surface_origin: (i32, i32), font_size: f32) -> (i32, i32, i32, i32) {
+    let h = font_size.round().max(1.0) as i32;
+    (
+        (caret.0 - surface_origin.0 as f32).round() as i32,
+        (caret.1 - surface_origin.1 as f32).round() as i32,
+        2,
+        h,
+    )
 }
 
 /// 释放输入法（提交/取消后调用）。
@@ -255,6 +315,8 @@ impl wayland_client::Dispatch<wayland_protocols::wp::text_input::zv3::client::zw
             }
         }
         if changed {
+            // 文字变长后插入点右移，候选框要跟着走
+            sync_cursor(state);
             super::paint::refresh_all(state);
         }
     }
@@ -314,6 +376,15 @@ mod tests {
         cancel(&mut ov);
         assert!(ov.text_edit.is_none());
         assert!(ov.doc.objects().is_empty());
+    }
+
+    #[test]
+    fn caret_rect_is_surface_local() {
+        // 画布坐标 (2920,840)，焦点表面原点 (1920,0) → 局部 (1000,840)
+        let r = caret_local((2920.0, 840.0), (1920, 0), 24.0);
+        assert_eq!(r, (1000, 840, 2, 24));
+        // 第二块屏原点为 0 时是恒等映射
+        assert_eq!(caret_local((300.0, 200.0), (0, 0), 20.0), (300, 200, 2, 20));
     }
 
     #[test]
