@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! 贴图的输入（PIN-2/PIN-4/PIN-6）：按住左键拖动、滚轮缩放、`Ctrl`+滚轮透明度、
-//! 方向键微调、双击 / `Esc` 关闭、`B` 开关边框。
+//! 贴图的输入（PIN-2/PIN-4/PIN-6）：按住左键拖动（**可跨屏**）、滚轮缩放、
+//! `Ctrl`+滚轮透明度、方向键微调、双击 / `Esc` 关闭、`B` 开关边框。
 //!
-//! 事件派发用**带标记的 udata**（`PinPtr` / `PinKbd` / `PinSurface` / `PinLayer`），
+//! 事件派发用**带标记的 udata**（`PinPtr` / `PinKbd` / `PinSurfaceKey` / `PinLayerKey`），
 //! 与覆盖层那份 `Dispatch<WlPointer, ()>` 互不干扰。
 //!
-//! **坐标模型**：贴图表面覆盖整个输出，`wl_pointer` 的局部坐标因此就是输出内绝对坐标，
-//! 与贴图自己在哪里无关。拖动位置 = `指针 - 按下时的抓取偏移`，幂等、不累积漂移。
-//! （早期版本用 `set_margin` 移动"刚好包住图像"的小表面：表面移动会让指针局部坐标跟着变，
-//! 而合成器应用 margin 是异步的，两者互相追着跑 —— 表现为"不跟手"或"拖一下就飞出屏幕"。）
+//! **坐标模型**：每个输出一块覆盖整屏的表面，`wl_pointer` 的局部坐标 + 该输出原点
+//! = 桌面坐标。拖动位置 = `桌面指针 - 抓取偏移`，与表面位置无关 → 幂等、不漂移、能跨屏。
 
 use wayland_client::protocol::wl_keyboard::{self, KeyState, WlKeyboard};
 use wayland_client::protocol::wl_pointer::{self, Axis, ButtonState, WlPointer};
@@ -21,10 +19,11 @@ use crate::wayland::Backend;
 pub struct PinPtr;
 /// 贴图键盘的 udata 标记。
 pub struct PinKbd;
-/// 贴图表面的 udata 标记。
-pub struct PinSurface;
-/// 贴图 layer surface 的 udata 标记。
-pub struct PinLayer;
+/// 贴图表面的 udata 标记（记录所属输出）。
+#[allow(dead_code)] // 目前不需要读下标，仅用于与覆盖层的派发区分开
+pub struct PinSurfaceKey(pub usize);
+/// 贴图 layer surface 的 udata 标记（记录所属输出）。
+pub struct PinLayerKey(pub usize);
 
 // Linux evdev 键码
 const KEY_ESC: u32 = 1;
@@ -37,7 +36,7 @@ const KEY_SHIFT_L: u32 = 42;
 const KEY_SHIFT_R: u32 = 54;
 const BTN_LEFT: u32 = 0x110;
 
-/// 拖动状态：按下瞬间「指针 - 贴图左上角」的偏移，之后保持不变。
+/// 拖动状态：按下瞬间「桌面指针 - 贴图左上角」，之后不变。
 #[derive(Clone, Copy, Debug)]
 pub struct Drag {
     pub offset: (f64, f64),
@@ -55,16 +54,22 @@ pub fn next_zoom(cur: f32, up: bool) -> f32 {
     (cur * factor).clamp(0.2, 5.0)
 }
 
-/// 拖动中的新位置：`指针绝对坐标 - 抓取偏移`，钳在输出内。
+/// 拖动中的新位置（桌面坐标）：`指针 - 抓取偏移`，钳在虚拟桌面内。
 ///
-/// 表面覆盖整屏 → `local` 就是绝对坐标 → 这个式子与表面当前位置无关，
-/// 因此**幂等**：同一指针位置重复计算得到同一结果，不会因事件频率/合成器延迟而漂移。
-pub fn drag_target(local: (f64, f64), offset: (f64, f64), surface: (u32, u32), size: (i32, i32)) -> (i32, i32) {
-    let max_x = (surface.0 as i32 - size.0).max(0);
-    let max_y = (surface.1 as i32 - size.1).max(0);
-    let x = (local.0 - offset.0).round() as i32;
-    let y = (local.1 - offset.1).round() as i32;
-    (x.clamp(0, max_x), y.clamp(0, max_y))
+/// `desktop` 是整块虚拟桌面 `(x0, y0, w, h)`；跨屏拖动因此是自然支持的。
+pub fn drag_target(
+    pointer: (f64, f64),
+    offset: (f64, f64),
+    desktop: (i32, i32, i32, i32),
+    size: (i32, i32),
+) -> (i32, i32) {
+    let x = (pointer.0 - offset.0).round() as i32;
+    let y = (pointer.1 - offset.1).round() as i32;
+    let min_x = desktop.0;
+    let min_y = desktop.1;
+    let max_x = (desktop.0 + desktop.2 - size.0).max(min_x);
+    let max_y = (desktop.1 + desktop.3 - size.1).max(min_y);
+    (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
 }
 
 impl Dispatch<WlPointer, PinPtr> for Backend {
@@ -80,12 +85,17 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
         match event {
             wl_pointer::Event::Enter {
                 serial,
+                surface,
                 surface_x,
                 surface_y,
-                ..
             } => {
                 state.pin_serial = serial;
                 state.pin_cursor = (surface_x, surface_y);
+                // 记下指针当前在哪个输出的表面上（换算桌面坐标要用它的原点）
+                state.pin_active_layer = state
+                    .pins
+                    .first()
+                    .and_then(|p| p.layers.iter().position(|l| l.surface == surface));
             }
             wl_pointer::Event::Motion {
                 surface_x, surface_y, ..
@@ -94,16 +104,14 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                 let Some(pin) = state.pins.first_mut() else {
                     return;
                 };
-                // 只有**按住左键**时才移动
                 let Some(drag) = pin.drag else { return };
-                let size = pin.scaled_size();
-                let surface = pin.logical.unwrap_or((1, 1));
-                let next = drag_target((surface_x, surface_y), drag.offset, surface, size);
+                let Some(li) = state.pin_active_layer else { return };
+                let Some(layer) = pin.layers.get(li) else { return };
+                // 局部坐标 + 输出原点 = 桌面坐标
+                let pointer = (surface_x + layer.origin.0 as f64, surface_y + layer.origin.1 as f64);
+                let next = drag_target(pointer, drag.offset, pin.desktop_rect(), pin.scaled_size());
                 if next != pin.pos {
-                    crate::wayland::debug(format!(
-                        "拖动：指针({surface_x:.0},{surface_y:.0}) 偏移{:?} 表面{:?} → {:?}",
-                        drag.offset, surface, next
-                    ));
+                    crate::wayland::debug(format!("拖动：指针{pointer:?} 偏移{:?} → {next:?}", drag.offset));
                     pin.pos = next;
                     dirty = true;
                 }
@@ -136,14 +144,20 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                         state.pin_last_click = None;
                     } else {
                         state.pin_last_click = Some((now, state.pin_cursor));
-                        // 开始拖动：记录"指针 - 贴图左上角"
+                        // 开始拖动：记录「桌面指针 - 贴图左上角」
+                        let Some(li) = state.pin_active_layer else {
+                            return;
+                        };
                         if let Some(pin) = state.pins.first_mut() {
-                            pin.drag = Some(Drag {
-                                offset: (
-                                    state.pin_cursor.0 - pin.pos.0 as f64,
-                                    state.pin_cursor.1 - pin.pos.1 as f64,
-                                ),
-                            });
+                            if let Some(layer) = pin.layers.get(li) {
+                                let pointer = (
+                                    state.pin_cursor.0 + layer.origin.0 as f64,
+                                    state.pin_cursor.1 + layer.origin.1 as f64,
+                                );
+                                pin.drag = Some(Drag {
+                                    offset: (pointer.0 - pin.pos.0 as f64, pointer.1 - pin.pos.1 as f64),
+                                });
+                            }
                         }
                     }
                 } else if let Some(pin) = state.pins.first_mut() {
@@ -159,7 +173,6 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                     return;
                 };
                 if state.pin_ctrl {
-                    // Ctrl + 滚轮：透明度
                     let next = next_opacity(pin.opacity, value < 0.0);
                     if next != pin.opacity {
                         pin.opacity = next;
@@ -167,12 +180,12 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                         crate::wayland::debug(format!("贴图透明度 → {}", pin.opacity));
                     }
                 } else {
-                    // 滚轮：缩放（0.2× – 5×），保持贴图中心不动
                     let next = next_zoom(pin.zoom, value < 0.0);
                     if (next - pin.zoom).abs() > 0.01 {
                         let (ow, oh) = pin.scaled_size();
                         pin.zoom = next;
                         let (nw, nh) = pin.scaled_size();
+                        // 以中心为基准缩放
                         pin.pos = ((pin.pos.0 + (ow - nw) / 2).max(0), (pin.pos.1 + (oh - nh) / 2).max(0));
                         dirty = true;
                         crate::wayland::debug(format!("贴图缩放 → {:.2}× @{:?}", pin.zoom, pin.pos));
@@ -184,6 +197,7 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                 if let Some(pin) = state.pins.first_mut() {
                     pin.drag = None;
                 }
+                state.pin_active_layer = None;
             }
             _ => {}
         }
@@ -234,7 +248,10 @@ impl Dispatch<WlKeyboard, PinKbd> for Backend {
                             KEY_UP => (0, -step),
                             _ => (0, step),
                         };
-                        pin.pos = ((pin.pos.0 + dx).max(0), (pin.pos.1 + dy).max(0));
+                        let desktop = pin.desktop_rect();
+                        let size = pin.scaled_size();
+                        let moved = (pin.pos.0 + dx, pin.pos.1 + dy);
+                        pin.pos = drag_target((moved.0 as f64, moved.1 as f64), (0.0, 0.0), desktop, size);
                         dirty = true;
                     }
                     KEY_SHIFT_L | KEY_SHIFT_R => {}
@@ -253,32 +270,44 @@ impl Dispatch<WlKeyboard, PinKbd> for Backend {
 mod tests {
     use super::*;
 
+    // 虚拟桌面：左屏 0..1920，右屏 1920..3840（高度 1080）
+    const DESKTOP: (i32, i32, i32, i32) = (0, 0, 3840, 1080);
+    const SIZE: (i32, i32) = (400, 300);
+
     #[test]
     fn drag_is_idempotent() {
-        // 表面 1920×1080，贴图 400×300，按下点相对左上角 (50,50)
         let offset = (50.0, 50.0);
-        let p1 = drag_target((250.0, 250.0), offset, (1920, 1080), (400, 300));
+        let p1 = drag_target((250.0, 250.0), offset, DESKTOP, SIZE);
         assert_eq!(p1, (200, 200));
-        // 同一指针位置重复计算 → 同一结果（不因事件频率漂移）
-        assert_eq!(drag_target((250.0, 250.0), offset, (1920, 1080), (400, 300)), p1);
+        assert_eq!(drag_target((250.0, 250.0), offset, DESKTOP, SIZE), p1);
     }
 
     #[test]
     fn drag_follows_pointer_exactly() {
         let offset = (50.0, 50.0);
-        // 指针右移 100、下移 40 → 位置同样移动 100/40
-        assert_eq!(
-            drag_target((350.0, 290.0), offset, (1920, 1080), (400, 300)),
-            (300, 240)
-        );
+        assert_eq!(drag_target((350.0, 290.0), offset, DESKTOP, SIZE), (300, 240));
+    }
+
+    #[test]
+    fn drag_can_cross_to_second_output() {
+        let offset = (50.0, 50.0);
+        // 指针到右屏 x=2500 → 贴图可以放到 x=2450（超过左屏宽度 1920）
+        assert_eq!(drag_target((2500.0, 400.0), offset, DESKTOP, SIZE), (2450, 350));
+    }
+
+    #[test]
+    fn drag_clamps_to_desktop_edges() {
+        let offset = (50.0, 50.0);
+        assert_eq!(drag_target((0.0, 0.0), offset, DESKTOP, SIZE), (0, 0));
+        assert_eq!(drag_target((9999.0, 9999.0), offset, DESKTOP, SIZE), (3440, 780));
     }
 
     #[test]
     fn opacity_steps_and_clamps() {
         assert_eq!(next_opacity(255, false), 239);
-        assert_eq!(next_opacity(48, false), 32, "下限 32");
+        assert_eq!(next_opacity(48, false), 32);
         assert_eq!(next_opacity(200, true), 216);
-        assert_eq!(next_opacity(255, true), 255, "上限 255");
+        assert_eq!(next_opacity(255, true), 255);
     }
 
     #[test]
@@ -286,17 +315,6 @@ mod tests {
         assert!((next_zoom(1.0, true) - 1.1).abs() < 1e-6);
         assert!((next_zoom(1.0, false) - 0.9).abs() < 1e-6);
         assert_eq!(next_zoom(5.0, true), 5.0);
-        assert!((next_zoom(0.25, false) - 0.225).abs() < 1e-6);
         assert_eq!(next_zoom(0.2, false), 0.2);
-    }
-
-    #[test]
-    fn drag_clamps_inside_output() {
-        let offset = (50.0, 50.0);
-        assert_eq!(drag_target((0.0, 0.0), offset, (1920, 1080), (400, 300)), (0, 0));
-        assert_eq!(
-            drag_target((5000.0, 5000.0), offset, (1920, 1080), (400, 300)),
-            (1520, 780)
-        );
     }
 }

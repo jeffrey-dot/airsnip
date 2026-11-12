@@ -267,10 +267,18 @@ Wayland 没有 Windows 的 `EDIT` 子控件可用，所以文本编辑是自己�
 
 `crates/airsnip-linux/src/pin/`。选型与踩点：
 
-- **表面**：`zwlr_layer_shell_v1` 的 **overlay 层**（与覆盖层同一套协议），
-  `anchor = Top|Left` + `margin(top, left)` 精确定位；拖动只改 margin，不重建表面。
-  **首次 commit 前必须先 `set_size`**：只锚定 Top|Left 时 `width=0` 是协议错误
-  （实测报 `Protocol error 1 … width 0 requested without setting left and right anchors`）。
+- **表面**：`zwlr_layer_shell_v1` 的 **overlay 层**，**每个输出一块覆盖整屏的表面**，
+  各自只画「贴图 ∩ 本输出」，并把输入区域限制在该交集内（其余区域点击穿透）。
+  贴图位置用**虚拟桌面坐标**，因此可以跨屏拖动。
+
+  *走过的弯路（两次用户实测反馈）*：早期用「刚好包住图像的小表面 + `set_margin` 定位」，
+  拖动时却是**悬浮即拖**（`Enter` 就置了拖动状态、且永不清理），随后改成"按下才拖"仍然
+  **时好时坏**：局部指针坐标是相对**当前表面位置**的，而合成器应用 margin 是异步的，
+  位置公式 `pos + local - grab` 会重复叠加同一段位移 —— 动快点直接飞出屏幕。
+  改成整屏表面后指针坐标就是输出的绝对坐标，`pos = 指针 - 抓取偏移` 幂等且与表面位置无关。
+  另外：整屏表面必须 `set_input_region`，否则会挡住下层所有窗口的点击；
+  只锚 Top|Left 且 `size=0` 是协议错误（`width 0 requested without setting left and right anchors`），
+  四边锚定才能拿到输出尺寸。
 - **必须显式指定 output**：layer surface 不绑定 output 时由合成器自己挑（niri 实测挑到了
   另一块屏）。截图侧按「选区中心落在哪个输出」把输出名传给 `pin --output`。
 - **缩放 / 透明度**在写 `wl_shm` 缓冲时用 CPU 做（最近邻 + alpha 乘系数），

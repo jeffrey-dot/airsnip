@@ -71,20 +71,22 @@ fn print_help() {
 
 fn cmd_pin(args: &[String]) -> Result<(), Error> {
     let mut path: Option<PathBuf> = None;
-    let mut output: Option<String> = None;
+    let mut pos = (120, 120);
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--output" => {
+            "--pos" => {
                 i += 1;
-                output = Some(args.get(i).ok_or("--output 需要一个输出名")?.clone());
+                let v = args.get(i).ok_or("--pos 需要 x,y")?;
+                let (x, y) = v.split_once(',').ok_or("--pos 格式应为 x,y")?;
+                pos = (x.trim().parse()?, y.trim().parse()?);
             }
             other => path = Some(PathBuf::from(other)),
         }
         i += 1;
     }
-    let path = path.ok_or("用法：airsnip pin <图片路径> [--output 输出名]")?;
-    pin::run(&path, output.as_deref())
+    let path = path.ok_or("用法：airsnip pin <图片路径> [--pos x,y]")?;
+    pin::run(&path, pos)
 }
 
 fn cmd_capture(args: &[String]) -> Result<(), Error> {

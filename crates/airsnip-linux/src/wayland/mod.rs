@@ -68,6 +68,8 @@ pub struct Backend {
     pub pin_serial: u32,
     pub pin_cursor: (f64, f64),
     pub pin_last_click: Option<(std::time::Instant, (f64, f64))>,
+    /// 指针当前所在贴图表面的输出下标（换算桌面坐标用）。
+    pub pin_active_layer: Option<usize>,
     pub pin_ctrl: bool,
     pub pin_shift: bool,
     pub pin_pointer: Option<WlPointer>,
