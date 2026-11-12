@@ -8,7 +8,6 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
@@ -20,6 +19,9 @@ use wayland_client::{Connection, Dispatch, QueueHandle};
 use crate::Error;
 use crate::wayland::{Backend, Session};
 
+/// 交给 `wl-copy` 持有选区（实现见 `crate::clipboard`，贴图也用同一个）。
+pub use crate::clipboard::hand_off;
+
 /// 数据源的共享状态。
 #[derive(Default)]
 pub struct ClipData {
@@ -28,32 +30,6 @@ pub struct ClipData {
     pub sent: bool,
     /// 选区被别的客户端顶掉（无需再等）。
     pub cancelled: bool,
-}
-
-/// 优先把 PNG 交给 `wl-copy`：它会 fork 一个常驻进程持有选区，本进程可以立刻退出。
-///
-/// 这是**与桌面其余截图工具一致**的做法（Flameshot / DMS quickCapture 等都这么干），
-/// 好处是 AirSnip 不留下常驻进程、也不占用「选区所有者」这个身份；
-/// 代价是依赖 `wl-clipboard`（Wayland 上几乎必装，Arch 的 `wl-clipboard` 包）。
-/// 没装时返回 Err，调用方退回内置驻留模式（`set` + `serve`）。
-pub fn hand_off(png: &[u8]) -> Result<(), Error> {
-    let mut child = Command::new("wl-copy")
-        .args(["--type", "image/png"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("启动 wl-copy 失败：{e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(png).map_err(|e| format!("写入 wl-copy 失败：{e}"))?;
-    }
-    // wl-copy 读完 stdin 就 fork 出常驻进程并退出，这里等的是那个短命的父进程。
-    let status = child.wait().map_err(|e| format!("等待 wl-copy 失败：{e}"))?;
-    if !status.success() {
-        return Err(format!("wl-copy 退出码 {status}").into());
-    }
-    crate::wayland::debug(format!("剪贴板：已交给 wl-copy（{} 字节）", png.len()));
-    Ok(())
 }
 
 /// 把 PNG 字节设为剪贴板选区（**必须在覆盖层销毁前调用**：Wayland 要求

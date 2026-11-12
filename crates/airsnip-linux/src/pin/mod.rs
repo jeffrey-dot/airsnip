@@ -94,6 +94,30 @@ impl Pin {
         (w, h)
     }
 
+    /// 导出当前显示尺寸的内容（最近邻缩放，不含边框与透明度）。
+    ///
+    /// 与 Windows 版 `export_content()` 语义一致：复制/保存的是**看到的内容**，
+    /// 不是原图也不是带边框的显示缓冲。
+    pub fn export_canvas(&self) -> crate::canvas::Canvas {
+        let (w, h) = self.scaled_size();
+        let mut out = crate::canvas::Canvas::new(w as u32, h as u32);
+        if (self.zoom - 1.0).abs() < 1e-3 {
+            let n = (w as usize * h as usize * 4).min(self.image.px.len());
+            out.px[..n].copy_from_slice(&self.image.px[..n]);
+            return out;
+        }
+        for y in 0..h {
+            let sy = ((y as f32 / self.zoom) as u32).min(self.image.h.saturating_sub(1));
+            for x in 0..w {
+                let sx = ((x as f32 / self.zoom) as u32).min(self.image.w.saturating_sub(1));
+                let si = ((sy * self.image.w + sx) * 4) as usize;
+                let di = ((y as u32 * w as u32 + x as u32) * 4) as usize;
+                out.px[di..di + 4].copy_from_slice(&self.image.px[si..si + 4]);
+            }
+        }
+        out
+    }
+
     /// 贴图矩形（桌面坐标）。
     pub fn rect(&self) -> (i32, i32, i32, i32) {
         let (w, h) = self.scaled_size();
@@ -356,4 +380,66 @@ pub fn run(png_path: &std::path::Path, pos: (i32, i32)) -> Result<(), Error> {
     session.backend.pins.clear();
     session.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pin_with(img: PinImage, zoom: f32) -> Pin {
+        // 只测导出逻辑，表面相关字段留空
+        Pin {
+            image: img,
+            pos: (0, 0),
+            zoom,
+            opacity: 200,
+            border: true,
+            layers: Vec::new(),
+            drag: None,
+            closed: false,
+        }
+    }
+
+    fn img(w: u32, h: u32) -> PinImage {
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for i in 0..(w * h) {
+            px.extend_from_slice(&[i as u8, 20, 30, 255]);
+        }
+        PinImage { w, h, px }
+    }
+
+    #[test]
+    fn export_at_1x_is_original_pixels() {
+        let src = img(4, 3);
+        let pin = pin_with(
+            PinImage {
+                w: 4,
+                h: 3,
+                px: src.px.clone(),
+            },
+            1.0,
+        );
+        let out = pin.export_canvas();
+        assert_eq!((out.w, out.h), (4, 3));
+        assert_eq!(&out.px[..4], &[0, 20, 30, 255]);
+        // 导出不受透明度 / 边框影响
+        assert_eq!(out.px[3], 255);
+    }
+
+    #[test]
+    fn export_scales_with_zoom() {
+        let src = img(4, 4);
+        let pin = pin_with(
+            PinImage {
+                w: 4,
+                h: 4,
+                px: src.px.clone(),
+            },
+            0.5,
+        );
+        let out = pin.export_canvas();
+        assert_eq!((out.w, out.h), (2, 2));
+        // 最近邻：(1,0) 取源图 (2,0) → 索引 2
+        assert_eq!(out.px[(0 * 2 + 1) * 4], 2);
+    }
 }

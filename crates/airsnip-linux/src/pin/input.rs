@@ -27,6 +27,8 @@ pub struct PinLayerKey(pub usize);
 
 // Linux evdev 键码
 const KEY_ESC: u32 = 1;
+const KEY_ENTER: u32 = 28;
+const KEY_KPENTER: u32 = 96;
 const KEY_B: u32 = 48;
 const KEY_LEFT: u32 = 105;
 const KEY_RIGHT: u32 = 106;
@@ -96,6 +98,10 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                     .pins
                     .first()
                     .and_then(|p| p.layers.iter().position(|l| l.surface == surface));
+                crate::wayland::debug(format!(
+                    "贴图指针进入 ({surface_x:.0},{surface_y:.0}) 图层{:?}",
+                    state.pin_active_layer
+                ));
             }
             wl_pointer::Event::Motion {
                 surface_x, surface_y, ..
@@ -236,6 +242,21 @@ impl Dispatch<WlKeyboard, PinKbd> for Backend {
                     KEY_ESC => {
                         pin.closed = true;
                         crate::wayland::debug("贴图：Esc 关闭");
+                    }
+                    // Enter：把内容复制到剪贴板后关闭（与 Windows 版右键「复制」同内容：
+                    // 当前显示尺寸、不含边框/透明度）
+                    KEY_ENTER | KEY_KPENTER => {
+                        let canvas = pin.export_canvas();
+                        match crate::codec::png_bytes(&canvas).and_then(|png| crate::clipboard::hand_off(&png)) {
+                            Ok(()) => {
+                                pin.closed = true;
+                                crate::wayland::debug("贴图：Enter 复制并关闭");
+                            }
+                            Err(e) => {
+                                // 复制失败就别关：否则内容直接丢了
+                                eprintln!("airsnip：贴图复制失败（{e}），保持打开");
+                            }
+                        }
                     }
                     KEY_B => {
                         pin.border = !pin.border;

@@ -15,6 +15,7 @@
 
 mod canvas;
 mod capture;
+mod clipboard;
 mod codec;
 mod draw;
 mod overlay;
