@@ -67,19 +67,35 @@ pub fn paint_pin(state: &mut Backend, idx: usize) {
             );
         }
 
-        // 输入区域 = 交集；没有交集就是空区域（整屏点击穿透）
-        if let (Some(compositor), Some(qh)) = (state.compositor.clone(), state.qh.clone()) {
-            let region = compositor.create_region(&qh, ());
-            if let Some((ix, iy, iw, ih)) = inter {
-                region.add(ix - origin.0, iy - origin.1, iw, ih);
-            }
-            layer.surface.set_input_region(Some(&region));
-            region.destroy();
-        }
-
         buf.released.store(false, std::sync::atomic::Ordering::Release);
         layer.surface.attach(Some(&buf.buffer), 0, 0);
         layer.surface.damage_buffer(0, 0, buf.w, buf.h);
+        layer.surface.commit();
+    }
+}
+
+/// 立即更新各输出的**输入区域**（与重绘解耦）。
+///
+/// 拖动时必须**先**把区域挪到新位置：区域一旦落后于图像，指针就会"跑出"表面，
+/// 合成器发 `leave`，拖动状态被清掉 —— 表现为「拖到一半不动了」。
+/// 区域更新只发协议请求（不需要缓冲），因此永远能跟上。
+pub fn update_input(state: &mut Backend, idx: usize) {
+    let Some(pin) = state.pins.get_mut(idx) else {
+        return;
+    };
+    let rect = pin.rect();
+    let (Some(compositor), Some(qh)) = (state.compositor.clone(), state.qh.clone()) else {
+        return;
+    };
+    for layer in pin.layers.iter_mut() {
+        let inter = intersect(rect, (layer.origin.0, layer.origin.1, layer.size.0, layer.size.1));
+        let region = compositor.create_region(&qh, ());
+        if let Some((ix, iy, iw, ih)) = inter {
+            region.add(ix - layer.origin.0, iy - layer.origin.1, iw, ih);
+        }
+        layer.surface.set_input_region(Some(&region));
+        region.destroy();
+        // 只提交表面状态（没有附缓冲），让新区域立即生效
         layer.surface.commit();
     }
 }

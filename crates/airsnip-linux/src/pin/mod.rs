@@ -275,6 +275,8 @@ impl Dispatch<ZwlrLayerSurfaceV1, input::PinLayerKey> for Backend {
                 pin.ensure_buf(key.0, &shm, qh);
             }
         }
+        // 区域先就位（默认区域是整块表面，会把下层窗口的点击全挡住）
+        paint::update_input(state, 0);
         paint::paint_all(state);
     }
 }

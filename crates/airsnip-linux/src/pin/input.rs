@@ -96,6 +96,10 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                     .pins
                     .first()
                     .and_then(|p| p.layers.iter().position(|l| l.surface == surface));
+                crate::wayland::debug(format!(
+                    "贴图指针进入：局部({surface_x:.0},{surface_y:.0}) 图层{:?}",
+                    state.pin_active_layer
+                ));
             }
             wl_pointer::Event::Motion {
                 surface_x, surface_y, ..
@@ -111,7 +115,7 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                 let pointer = (surface_x + layer.origin.0 as f64, surface_y + layer.origin.1 as f64);
                 let next = drag_target(pointer, drag.offset, pin.desktop_rect(), pin.scaled_size());
                 if next != pin.pos {
-                    crate::wayland::debug(format!("拖动：指针{pointer:?} 偏移{:?} → {next:?}", drag.offset));
+                    crate::wayland::debug(format!("拖动：指针{pointer:?} → {next:?}"));
                     pin.pos = next;
                     dirty = true;
                 }
@@ -148,6 +152,7 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
                         let Some(li) = state.pin_active_layer else {
                             return;
                         };
+                        crate::wayland::debug(format!("贴图按下：指针{:?} 图层{li}", state.pin_cursor));
                         if let Some(pin) = state.pins.first_mut() {
                             if let Some(layer) = pin.layers.get(li) {
                                 let pointer = (
@@ -202,6 +207,8 @@ impl Dispatch<WlPointer, PinPtr> for Backend {
             _ => {}
         }
         if dirty {
+            // 先同步输入区域（必须在旧区域把指针"甩出去"之前），再重绘
+            paint::update_input(state, 0);
             paint::paint_all(state);
         }
     }
@@ -261,6 +268,7 @@ impl Dispatch<WlKeyboard, PinKbd> for Backend {
             _ => {}
         }
         if dirty {
+            paint::update_input(state, 0);
             paint::paint_all(state);
         }
     }
